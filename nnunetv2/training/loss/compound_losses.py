@@ -1,9 +1,35 @@
+
 import torch
-from nnunetv2.training.loss.dice import SoftDiceLoss, MemoryEfficientSoftDiceLoss
-from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss, TopKLoss
-from nnunetv2.utilities.helpers import softmax_helper_dim1
 from torch import nn
 
+from nnunetv2.training.loss.dice import SoftDiceLoss, MemoryEfficientSoftDiceLoss
+from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss, TopKLoss
+from nnunetv2.training.loss.focal_tversky import FocalTverskyLoss
+from nnunetv2.training.loss.centerline_dice import Soft_cldice
+from nnunetv2.utilities.helpers import softmax_helper_dim1
+
+class FocalTversky_and_CE_and_Soft_cldice_loss(nn.Module):
+    
+    def __init__(self, focal_tversky_kwargs, ce_kwargs, cldice_kwargs, weight_ce=1, weight_focal_tversky=1, weight_soft_cldice=1):    
+        
+        super(FocalTversky_and_CE_and_Soft_cldice_loss, self).__init__()
+        
+        self.weight_focal_tversky = weight_focal_tversky
+        self.weight_ce = weight_ce
+        self.weight_soft_cldice = weight_soft_cldice
+
+        self.ce = RobustCrossEntropyLoss(**ce_kwargs)
+        self.focal_tversky = FocalTverskyLoss(**focal_tversky_kwargs)
+        self.soft_cldice = Soft_cldice(**cldice_kwargs)
+
+    def forward(self, net_output: torch.Tensor, target: torch.Tensor):
+
+        ce_loss = self.ce(net_output, target)
+        focal_tversky_loss = self.focal_tversky(net_output, target)
+        soft_cldice_loss = self.soft_cldice(target, torch.softmax(net_output, dim=1))
+        result = self.weight_ce * ce_loss + self.weight_focal_tversky * focal_tversky_loss + self.weight_soft_cldice * soft_cldice_loss
+        
+        return result
 
 class DC_and_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, weight_ce=1, weight_dice=1, ignore_label=None,
@@ -54,7 +80,6 @@ class DC_and_CE_loss(nn.Module):
 
         result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
         return result
-
 
 class DC_and_BCE_loss(nn.Module):
     def __init__(self, bce_kwargs, soft_dice_kwargs, weight_ce=1, weight_dice=1, use_ignore_label: bool = False,
@@ -151,6 +176,5 @@ class DC_and_topk_loss(nn.Module):
             if self.weight_dice != 0 else 0
         ce_loss = self.ce(net_output, target) \
             if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0) else 0
-
         result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
         return result
