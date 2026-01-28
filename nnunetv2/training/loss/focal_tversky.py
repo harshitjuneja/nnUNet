@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from dice import get_tp_fp_fn_tn    
+from nnunetv2.training.loss.dice import get_tp_fp_fn_tn    
 
 class FocalTverskyLoss(nn.Module):
     def __init__(self, alpha: float = 0.3, beta: float = 0.7, gamma: float = 1.33, smooth: float = 1e-6,
