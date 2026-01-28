@@ -6,6 +6,7 @@ from nnunetv2.training.loss.dice import SoftDiceLoss, MemoryEfficientSoftDiceLos
 from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss, TopKLoss
 from nnunetv2.training.loss.focal_tversky import FocalTverskyLoss
 from nnunetv2.training.loss.centerline_dice import Soft_cldice
+
 from nnunetv2.utilities.helpers import softmax_helper_dim1
 
 
@@ -33,19 +34,20 @@ class FocalTversky_and_CE_and_Soft_cldice_loss(nn.Module):
         net_output: (b, c, x, y(, z)) - Raw Logits
         target: (b, 1, x, y(, z)) - Label Map (indices)
         """
+
         if self.ignore_label is not None:
-            # Check for the assertion like in DC_and_CE_loss
             assert target.shape[1] == 1, 'ignore label is not implemented for one hot encoded target'
             mask = target != self.ignore_label
+
             # For Dice-based losses, replace ignore_label with background (0)
             # Mask will handle excluding these regions from the calculation
+            
             target_topo = torch.where(mask, target, 0)
             num_fg = mask.sum()
         else:
             target_topo = target
             mask = None
 
-        # 1. Cross Entropy Loss
         # target[:, 0] removes the channel dimension (b, 1, x, y) -> (b, x, y)
         ce_loss = self.ce(net_output, target[:, 0].long()) \
             if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0) else 0
@@ -60,6 +62,10 @@ class FocalTversky_and_CE_and_Soft_cldice_loss(nn.Module):
         pred_softmax = torch.softmax(net_output, dim=1)
         soft_cldice_loss = self.soft_cldice(target_topo.float(), pred_softmax) \
             if self.weight_soft_cldice != 0 else 0
+
+        print(f"CE Loss: {ce_loss.item() if isinstance(ce_loss, torch.Tensor) else ce_loss:.4f}, "
+              f"Focal Tversky Loss: {f_tversky_loss.item() if isinstance(f_tversky_loss, torch.Tensor) else f_tversky_loss:.4f}, "
+              f"Soft clDice Loss: {soft_cldice_loss.item() if isinstance(soft_cldice_loss, torch.Tensor) else soft_cldice_loss:.4f}")
 
         return (self.weight_ce * ce_loss + 
                 self.weight_focal_tversky * f_tversky_loss + 
@@ -237,53 +243,113 @@ class DC_and_topk_loss(nn.Module):
         return result
 
 if __name__ == "__main__":
-
     num_classes = 2
-    focal_tversky_kwargs = {'alpha': 0.3, 'beta': 0.7, 'gamma': 1.33, 'apply_nonlin': None}
+    focal_tversky_kwargs = {'alpha': 0.3, 'beta': 0.7, 'gamma': 1.33, 'apply_nonlin': torch.nn.Softmax(dim=1)}
     ce_kwargs = {}
-    cldice_kwargs = {}
-    
+    cldice_kwargs = {} 
+
     criterion = FocalTversky_and_CE_and_Soft_cldice_loss(
         focal_tversky_kwargs, ce_kwargs, cldice_kwargs,
         weight_ce=1, weight_focal_tversky=1, weight_soft_cldice=1
     )
 
-    # 2. Create Dummy Data [B, C, H, W]
+    shape_3d = (1, 1, 64, 64, 64)
+    target = torch.zeros(shape_3d, dtype=torch.long)
 
-    # Target is a Long tensor of indices for CE
-    target = torch.zeros((1, 2, 64, 64))
-
-    target[:, 20:40, 20:40] = 1  # A square in the middle
+    target[:, 0, 20:44, 20:44, 20:44] = 1 
     
-    # net_output is Raw Logits (before softmax)
-
-    # We want to test two cases: A bad pred and a good pred
-    bad_pred = torch.randn((1, num_classes, 64, 64), requires_grad=True)
+    # net_output shape: (B, num_classes, X, Y, Z)
+    pred_shape = (1, num_classes, 64, 64, 64)
     
-    # Good pred: high values where target is 1, low where 0
-    good_pred = torch.zeros((1, num_classes, 64, 64), requires_grad=True)
-
+    #random noise
+    bad_pred = torch.randn(pred_shape, requires_grad=True)
+    
+    # Case B: Good Prediction
+    # We initialize with low values and boost the correct channels
+    good_pred = torch.zeros(pred_shape, requires_grad=True)
     with torch.no_grad():
-        good_pred[:, 1, 20:40, 20:40] = 10.0
-        good_pred[:, 0, :20, :20] = 10.0
+        good_pred[:, 1, 20:44, 20:44, 20:44] = 3.0
+        good_pred[:, 0, :, :, :] = 3.0
+        good_pred[:, 0, 20:44, 20:44, 20:44] = 0.0
 
     loss_bad = criterion(bad_pred, target)
     loss_good = criterion(good_pred, target)
 
-    print("--- Compound Loss Test Results ---")
-    print(f"Bad Prediction Loss:  {loss_bad.mean():.4f}")
-    print(f"Good Prediction Loss: {loss_good.mean():.4f}")
+    print("--- 3D Compound Loss Test Results ---")
+    print(f"Bad Prediction Loss:  {loss_bad.item():.4f}")
+    print(f"Good Prediction Loss: {loss_good.item():.4f}")
 
-    if loss_good.mean() < loss_bad.mean():
-        print("✅ SUCCESS: Loss decreases as prediction improves.")
+    if loss_good < loss_bad:
+        print("✅ SUCCESS: Loss decreases as 3D prediction improves.")
     else:
-        print("❌ FAILURE: Loss did not decrease. Check your logic.")
+        print("❌ FAILURE: Loss did not decrease. Check class indexing or Tversky alpha/beta.")
 
     loss_bad.backward()
     if bad_pred.grad is not None:
-        print(f"✅ SUCCESS: Gradients are flowing to net_output. Mean grad: {bad_pred.grad.abs().mean().item():.6f}")
+        grad_mean = bad_pred.grad.abs().mean().item()
+        grad_max = bad_pred.grad.abs().max().item()
+        print(f"Gradient Flow Check: Mean grad: {grad_mean:.6f}, Max grad: {grad_max:.6f}")
+        if grad_mean > 0:
+            print(f"✅ SUCCESS: Gradients flowing through 3D volume. Mean grad: {grad_mean:.6f}")
+        else:
+            print("❌ FAILURE: Gradients are zero. Check for vanishing gradients or detach() calls.")
     else:
         print("❌ FAILURE: No gradients detected!")
+
+
+
+
+
+
+
+
+
+# if __name__ == "__main__":
+
+#     num_classes = 2
+#     focal_tversky_kwargs = {'alpha': 0.3, 'beta': 0.7, 'gamma': 1.33, 'apply_nonlin': None}
+#     ce_kwargs = {}
+#     cldice_kwargs = {}
+    
+#     criterion = FocalTversky_and_CE_and_Soft_cldice_loss(
+#         focal_tversky_kwargs, ce_kwargs, cldice_kwargs,
+#         weight_ce=1, weight_focal_tversky=1, weight_soft_cldice=1
+#     )
+
+#     # Target is a Long tensor of indices for CE
+#     target = torch.zeros((1, 2, 64, 64))
+
+#     target[:, 20:40, 20:40] = 1  # A square in the middle
+    
+#     # net_output is Raw Logits (before softmax)
+
+#     # We want to test two cases: A bad pred and a good pred
+#     bad_pred = torch.randn((1, num_classes, 64, 64), requires_grad=True)
+    
+#     # Good pred: high values where target is 1, low where 0
+#     good_pred = torch.zeros((1, num_classes, 64, 64), requires_grad=True)
+
+#     with torch.no_grad():
+#         good_pred[:, 1, 20:40, 20:40] = 10.0
+#         good_pred[:, 0, :20, :20] = 10.0
+
+#     loss_bad = criterion(bad_pred, target)
+#     loss_good = criterion(good_pred, target)
+
+#     print("--- Compound Loss Test Results ---")
+#     print(f"Bad Prediction Loss:  {loss_bad.mean():.4f}")
+#     print(f"Good Prediction Loss: {loss_good.mean():.4f}")
+
+#     if loss_good.mean() < loss_bad.mean():
+#         print("✅ SUCCESS: Loss decreases as prediction improves.")
+#     else:
+#         print("❌ FAILURE: Loss did not decrease. Check your logic.")
+
+#     loss_bad.backward()
+#     if bad_pred.grad is not None:
+#         print(f"✅ SUCCESS: Gradients are flowing to net_output. Mean grad: {bad_pred.grad.abs().mean().item():.6f}")
+#     else:
+#         print("❌ FAILURE: No gradients detected!")
 
 
         

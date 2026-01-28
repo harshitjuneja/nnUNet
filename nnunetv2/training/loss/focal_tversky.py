@@ -4,7 +4,7 @@ from torch import nn
 from nnunetv2.training.loss.dice import get_tp_fp_fn_tn    
 
 class FocalTverskyLoss(nn.Module):
-    def __init__(self, alpha: float = 0.3, beta: float = 0.7, gamma: float = 1.33, smooth: float = 1e-6,
+    def __init__(self, alpha: float = 0.3, beta: float = 0.7, gamma: float = 1.33, smooth: float = 1.0e-6,
                  apply_nonlin: nn.Module = None):
         super().__init__()
         self.alpha = alpha
@@ -23,11 +23,11 @@ class FocalTverskyLoss(nn.Module):
 
         # parameters to control the penalty for false positives and false negatives
         tversky_index = (tp + self.smooth) / (tp + self.alpha * fp + self.beta * fn + self.smooth)
-       
-        # focal parameter to reduce the relative loss for well-classified examples
-        focal_tversky_loss = (1 - tversky_index) ** self.gamma
 
-        return focal_tversky_loss
+        # focal parameter to reduce the relative loss for well-classified examples
+        focal_tversky_loss = torch.pow(torch.clamp(1 - tversky_index, min=1e-7), self.gamma)
+        # focal_tversky_loss = (1 - tversky_index) ** self.gamma
+        return focal_tversky_loss.mean()
 
 
 if __name__ == "__main__":
@@ -35,20 +35,19 @@ if __name__ == "__main__":
     # alpha=0.3, beta=0.7 favors recall (penalizes False Negatives harder)
     criterion = FocalTverskyLoss(alpha=0.3, beta=0.7, gamma=1.33, apply_nonlin=nn.Sigmoid())
     
-    # Target: A small 2x2 square of 1s in the center
-    targets = torch.zeros((1, 1, 4, 4))
+    targets = torch.zeros((1, 2, 4, 4))
     targets[:, :, 1:3, 1:3] = 1.0
     
-    logits_perfect = targets * 10.0 - 5.0 # High positive for 1s, negative for 0s
+    logits_perfect = targets * 10.0 - 5.0 
+    # High positive for 1s, negative for 0s
     
     # 4. Case B: Heavy False Negatives (Predicting background where there is foreground)
     # This should be penalized heavily by beta=0.7
-    logits_fn = torch.full((1, 1, 4, 4), -5.0) 
+    logits_fn = torch.full((1, 2, 4, 4), -5.0) 
     
     # 5. Case C: Heavy False Positives (Predicting foreground where there is background)
     # This should be penalized less by alpha=0.3
-    logits_fp = torch.full((1, 1, 4, 4), 5.0)
-
+    logits_fp = torch.full((1, 2, 4, 4), 5.0)
     loss_perfect = criterion(logits_perfect, targets)
     loss_fn = criterion(logits_fn, targets)
     loss_fp = criterion(logits_fp, targets)
@@ -58,8 +57,7 @@ if __name__ == "__main__":
     print(f"False Negative (Gap):    {loss_fn.item():.6f}")
     print(f"False Positive (Over):   {loss_fp.item():.6f}")
 
-    # 6. Gradient Check
-    logits_rand = torch.randn((1, 1, 4, 4), requires_grad=True)
+    logits_rand = torch.randn((1, 2, 4, 4), requires_grad=True)
     loss_rand = criterion(logits_rand, targets)
     loss_rand.backward()
     
