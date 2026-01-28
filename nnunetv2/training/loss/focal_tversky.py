@@ -25,6 +25,7 @@ class FocalTverskyLoss(nn.Module):
         tversky_index = (tp + self.smooth) / (tp + self.alpha * fp + self.beta * fn + self.smooth)
 
         # focal parameter to reduce the relative loss for well-classified examples
+        # focal_tversky_loss = torch.pow(-torch.log(tversky_index + 1e-7), self.gamma)
         focal_tversky_loss = torch.pow(torch.clamp(1 - tversky_index, min=1e-7), self.gamma)
         # focal_tversky_loss = (1 - tversky_index) ** self.gamma
         return focal_tversky_loss.mean()

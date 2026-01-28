@@ -9,7 +9,6 @@ from nnunetv2.training.loss.centerline_dice import Soft_cldice
 
 from nnunetv2.utilities.helpers import softmax_helper_dim1
 
-
 class FocalTversky_and_CE_and_Soft_cldice_loss(nn.Module):
     def __init__(self, focal_tversky_kwargs, ce_kwargs, cldice_kwargs, 
                  weight_ce=1, weight_focal_tversky=1, weight_soft_cldice=1, 
@@ -243,64 +242,106 @@ class DC_and_topk_loss(nn.Module):
         return result
 
 if __name__ == "__main__":
-    num_classes = 2
-    focal_tversky_kwargs = {'alpha': 0.3, 'beta': 0.7, 'gamma': 1.33, 'apply_nonlin': torch.nn.Softmax(dim=1)}
-    ce_kwargs = {}
-    cldice_kwargs = {} 
 
+    num_classes = 2
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    focal_tversky_kwargs = {'alpha': 0.3, 'beta': 0.7, 'gamma': 1.33, 'smooth': 1e-6}
+    ce_kwargs = {}
+    cldice_kwargs = {}
+    
     criterion = FocalTversky_and_CE_and_Soft_cldice_loss(
         focal_tversky_kwargs, ce_kwargs, cldice_kwargs,
-        weight_ce=1, weight_focal_tversky=1, weight_soft_cldice=1
-    )
+        weight_ce=1.0, weight_focal_tversky=3.5, weight_soft_cldice=2.5
+    ).to(device)
 
-    shape_3d = (1, 1, 64, 64, 64)
-    target = torch.zeros(shape_3d, dtype=torch.long)
+    target = torch.zeros((1, 1, 64, 64, 64), dtype=torch.long).to(device)
 
-    target[:, 0, 20:44, 20:44, 20:44] = 1 
+    target[:, 0, 20:44, 20:44, 20:44] = 1
+
+    test_input = torch.randn((1, num_classes, 64, 64, 64), requires_grad=True, device=device)
     
-    # net_output shape: (B, num_classes, X, Y, Z)
-    pred_shape = (1, num_classes, 64, 64, 64)
+    total_loss = criterion(test_input, target)
+    total_loss.backward(retain_graph=True)
     
-    #random noise
-    bad_pred = torch.randn(pred_shape, requires_grad=True)
+    if test_input.grad is not None:
+        g_mean = test_input.grad.abs().mean().item()
+        g_max = test_input.grad.abs().max().item()
+
+        print(f"Total Loss: {total_loss.item():.4f}")
+        print(f"Global Grad Mean: {g_mean:.8f} | Global Grad Max: {g_max:.8f}\n")
     
-    # Case B: Good Prediction
-    # We initialize with low values and boost the correct channels
-    good_pred = torch.zeros(pred_shape, requires_grad=True)
-    with torch.no_grad():
-        good_pred[:, 1, 20:44, 20:44, 20:44] = 3.0
-        good_pred[:, 0, :, :, :] = 3.0
-        good_pred[:, 0, 20:44, 20:44, 20:44] = 0.0
+    print(f"{'Component':<15} | {'Loss Val':<10} | {'Grad Mean':<12} | {'Grad Max':<12}")
+    print("-" * 65)
 
-    loss_bad = criterion(bad_pred, target)
-    loss_good = criterion(good_pred, target)
+    components = {
+        "Cross Entropy": criterion.ce(test_input, target[:, 0].long()),
+        "Focal Tversky": criterion.focal_tversky(torch.softmax(test_input, dim=1), target),
+        "Soft clDice":   criterion.soft_cldice(target.float(), torch.softmax(test_input, dim=1))
+    }
 
-    print("--- 3D Compound Loss Test Results ---")
-    print(f"Bad Prediction Loss:  {loss_bad.item():.4f}")
-    print(f"Good Prediction Loss: {loss_good.item():.4f}")
+    for name, loss_val in components.items():
+        if test_input.grad is not None: 
+            test_input.grad.zero_()
+        
+        loss_val.mean().backward(retain_graph=True)
+        
+        m_grad = test_input.grad.abs().mean().item()
+        x_grad = test_input.grad.abs().max().item()
+        
+        print(f"{name:<15} | {loss_val.mean().item():<10.4f} | {m_grad:<12.8f} | {x_grad:<12.8f}")
 
-    if loss_good < loss_bad:
-        print("✅ SUCCESS: Loss decreases as 3D prediction improves.")
-    else:
-        print("❌ FAILURE: Loss did not decrease. Check class indexing or Tversky alpha/beta.")
+    if test_input.grad is not None: test_input.grad.zero_()
 
-    loss_bad.backward()
-    if bad_pred.grad is not None:
-        grad_mean = bad_pred.grad.abs().mean().item()
-        grad_max = bad_pred.grad.abs().max().item()
-        print(f"Gradient Flow Check: Mean grad: {grad_mean:.6f}, Max grad: {grad_max:.6f}")
-        if grad_mean > 0:
-            print(f"✅ SUCCESS: Gradients flowing through 3D volume. Mean grad: {grad_mean:.6f}")
-        else:
-            print("❌ FAILURE: Gradients are zero. Check for vanishing gradients or detach() calls.")
-    else:
-        print("❌ FAILURE: No gradients detected!")
+# if __name__ == "__main__":
+#     num_classes = 2
+#     focal_tversky_kwargs = {'alpha': 0.3, 'beta': 0.7, 'gamma': 1.33, 'apply_nonlin': torch.nn.Softmax(dim=1)}
+#     ce_kwargs = {}
+#     cldice_kwargs = {} 
 
+#     criterion = FocalTversky_and_CE_and_Soft_cldice_loss(
+#         focal_tversky_kwargs, ce_kwargs, cldice_kwargs,
+#         weight_ce=1, weight_focal_tversky=1, weight_soft_cldice=1
+#     )
 
+#     shape_3d = (1, 1, 64, 64, 64)
 
+#     target = torch.zeros(shape_3d, dtype=torch.long)
 
+#     target[:, 0, 20:44, 20:44, 20:44] = 1 
+    
+#     # net_output shape: (B, num_classes, X, Y, Z)
+#     pred_shape = (1, num_classes, 64, 64, 64)
+#     good_pred = torch.zeros(pred_shape, requires_grad=True)
+#     bad_pred = torch.randn(pred_shape, requires_grad=True)
+    
+#     with torch.no_grad():
+#         good_pred[:, 1, 20:44, 20:44, 20:44] = 3.0
+#         good_pred[:, 0, :, :, :] = 3.0
+#         good_pred[:, 0, 20:44, 20:44, 20:44] = 0.0
 
+#     loss_good = criterion(good_pred, target)
+#     loss_bad = criterion(bad_pred, target)
 
+#     print("--- 3D Compound Loss Test Results ---")
+#     print(f"Bad Prediction Loss:  {loss_bad.item():.4f}")
+#     # print(f"Good Prediction Loss: {loss_good.item():.4f}")
+
+#     if loss_good < loss_bad:
+#         print("✅ SUCCESS: Loss decreases as 3D prediction improves.")
+#     else:
+#         print("❌ FAILURE: Loss did not decrease. Check class indexing or Tversky alpha/beta.")
+
+#     loss_bad.backward()
+#     if bad_pred.grad is not None:
+#         grad_mean = bad_pred.grad.abs().mean().item()
+#         grad_max = bad_pred.grad.abs().max().item()
+#         print(f"Gradient Flow Check: Mean grad: {grad_mean:.6f}, Max grad: {grad_max:.6f}")
+#         if grad_mean > 0:
+#             print(f"✅ SUCCESS: Gradients flowing through 3D volume. Mean grad: {grad_mean:.6f}")
+#         else:
+#             print("❌ FAILURE: Gradients are zero. Check for vanishing gradients or detach() calls.")
+#     else:
+#         print("❌ FAILURE: No gradients detected!")
 
 
 
