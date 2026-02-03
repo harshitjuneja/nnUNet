@@ -250,9 +250,9 @@ def evaluate_simple_entry_point():
 
 
 if __name__ == '__main__':
-    folder_ref = '/media/fabian/data/nnUNet_raw/Dataset004_Hippocampus/labelsTr'
-    folder_pred = '/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation'
-    output_file = '/home/fabian/results/nnUNet_remake/Dataset004_Hippocampus/nnUNetModule__nnUNetPlans__3d_fullres/fold_0/validation/summary.json'
+    folder_ref = '/workspace/Storage_fast/nnUNet_raw/Dataset501_LiverVessels/labelsTs'
+    folder_pred = '/workspace/Storage_fast/nnUNet_raw/Dataset501_LiverVessels/pred_vessels_3d_ftv'
+    output_file = '/workspace/Storage_fast/nnUNet_results/Dataset501_LiverVessels/nnUNetTrainerFTvCECLLoss_1__nnUNetPlans__3d_fullres/fold_0/summary.json'
     image_reader_writer = SimpleITKIO()
     file_ending = '.nii.gz'
     regions = labels_to_list_of_regions([1, 2])
